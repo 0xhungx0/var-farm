@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VAR ↔ Hyperliquid Funding Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Zalando+Sans+Expanded:wght@500;600;700&family=Geist+Mono:wght@400;500;700&display=swap">
+<style>
+:root{color-scheme:dark;--bg:#010612;--panel:#0b101b;--line:#ffffff18;--ink:#fff;--muted:#a0aec0;--blue:#4c9af8;--green:#56c75d;--red:#f1787e;--mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse 80% 420px at 50% 0,#4c9af826,transparent 70%),var(--bg);color:var(--ink);font:15px/1.5 Inter,system-ui,sans-serif;padding:28px 16px 60px}.wrap{max-width:1180px;margin:auto}header{margin-bottom:24px}h1{font-size:clamp(30px,5vw,52px);line-height:1.05;margin:0 0 10px;letter-spacing:-.035em}header p{color:var(--muted);margin:0;max-width:72ch}.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:clamp(18px,3vw,30px);box-shadow:0 22px 70px #0008}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}.status{font:12px var(--mono);color:var(--muted);white-space:nowrap}.status.live{color:var(--green)}.controls{display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:12px;align-items:end;margin:22px 0 16px}label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:13px;font-weight:600}input{width:100%;border:1px solid #263348;border-radius:9px;background:var(--bg);color:var(--ink);font:16px var(--mono);padding:12px}button{height:47px;border:0;border-radius:9px;padding:0 18px;background:var(--blue);color:#010612;font-weight:800;cursor:pointer}button:disabled{opacity:.55}.tablewrap{overflow:auto;max-height:680px;border:1px solid var(--line);border-radius:11px}table{width:100%;min-width:880px;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{padding:11px 14px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-size:12px;cursor:pointer;z-index:1}th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}td{font:14px var(--mono)}td:nth-child(2){font-family:Inter,system-ui,sans-serif}.gain{color:var(--green);font-weight:700}.loss{color:var(--red)}tbody tr:hover{background:#4c9af812}.foot{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:12px}.warning{margin-top:16px;padding:12px 14px;border-left:3px solid var(--red);background:#f1787e0c;color:var(--muted);font-size:13px}@media(max-width:720px){.top{flex-direction:column}.controls{grid-template-columns:1fr 1fr}.controls label:first-child{grid-column:1/-1}button{width:100%}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><h1>Live funding scanner</h1><p>Variational ↔ Hyperliquid exact ticker matches. It finds the side with cheaper funding and estimates the current gross carry.</p></header>
+<main class="panel">
+  <div class="top"><div><strong>Market opportunities</strong><div style="color:var(--muted);font-size:13px">Click any column heading to sort.</div></div><div id="status" class="status" aria-live="polite">Loading…</div></div>
+  <div class="controls">
+    <label>Find ticker<input id="search" type="search" placeholder="HYPE, SOL, ONDO…" autocomplete="off"></label>
+    <label>Position per side ($)<input id="size" type="number" min="100" step="100" value="5000"></label>
+    <label>Max price gap (%)<input id="gap" type="number" min=".1" max="20" step=".1" value="2"></label>
+    <button id="refresh" type="button">Refresh</button>
+  </div>
+  <div class="tablewrap"><table><thead><tr>
+    <th data-sort="symbol">Ticker</th><th data-sort="direction">Position</th><th data-sort="varApr">VAR APR</th><th data-sort="hlApr">HL APR</th><th data-sort="netApr">Gross edge</th><th data-sort="priceGap">Price gap</th><th data-sort="daily">Est. / day</th>
+  </tr></thead><tbody id="body"><tr><td colspan="7">Fetching live data…</td></tr></tbody></table></div>
+  <div class="foot"><span id="count">Matching markets: —</span><span>Auto-refresh: 60 seconds</span></div>
+  <div class="warning">Research tool only. Estimates exclude spread, slippage, changing funding, liquidation risk and contract differences. Verify both order screens before trading.</div>
+</main>
+</div>
+<script>
+(function(){
+  var VAR_API="https://omni-client-api.prod.ap-northeast-1.variational.io/metadata/stats",HL_API="https://api.hyperliquid.xyz/info";
+  var rows=[],sortKey="netApr",sortDir=-1,loading=false,$=function(id){return document.getElementById(id)};
+  function pct(n){return(n>=0?"+":"")+n.toFixed(2)+"%"}function money(n){return(n>=0?"+":"-")+"$"+Math.abs(n).toFixed(2)}
+  function td(text,cls){var el=document.createElement("td");el.textContent=text;if(cls)el.className=cls;return el}
+  function render(){
+    var q=$("search").value.trim().toUpperCase(),maxGap=parseFloat($("gap").value),size=Math.max(0,parseFloat($("size").value)||0);if(!isFinite(maxGap))maxGap=2;
+    var visible=rows.filter(function(r){return r.symbol.indexOf(q)!==-1&&r.priceGap<=maxGap});
+    visible.sort(function(a,b){var av=a[sortKey],bv=b[sortKey];return typeof av==="string"?sortDir*av.localeCompare(bv):sortDir*(av-bv)});
+    var body=$("body");body.textContent="";
+    if(!visible.length){var tr=document.createElement("tr"),empty=td("No matching markets pass these filters.");empty.colSpan=7;tr.appendChild(empty);body.appendChild(tr)}
+    visible.forEach(function(r){var tr=document.createElement("tr"),daily=size*r.netApr/100/365;tr.appendChild(td(r.symbol));tr.appendChild(td(r.direction));tr.appendChild(td(pct(r.varApr),r.varApr<0?"loss":""));tr.appendChild(td(pct(r.hlApr),r.hlApr<0?"loss":""));tr.appendChild(td(pct(r.netApr),"gain"));tr.appendChild(td(r.priceGap.toFixed(2)+"%"));tr.appendChild(td(money(daily),"gain"));body.appendChild(tr)});
+    $("count").textContent="Showing "+visible.length+" of "+rows.length+" exact shared tickers";
+  }
+  async function refresh(){
+    if(loading)return;loading=true;$("refresh").disabled=true;$("status").className="status";$("status").textContent="Refreshing…";
+    try{
+      var responses=await Promise.all([fetch(VAR_API,{cache:"no-store"}),fetch(HL_API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"metaAndAssetCtxs"}),cache:"no-store"})]);
+      if(!responses[0].ok||!responses[1].ok)throw new Error("API unavailable");var data=await Promise.all([responses[0].json(),responses[1].json()]),v=data[0],h=data[1],map={};
+      h[0].universe.forEach(function(m,i){map[m.name]=h[1][i]});rows=v.listings.reduce(function(out,m){var x=map[m.ticker],vm=Number(m.mark_price),hm=x&&Number(x.markPx);if(!x||!isFinite(vm)||!isFinite(hm)||vm<=0||hm<=0)return out;var va=Number(m.funding_rate)*100,ha=Number(x.funding)*8760*100;if(!isFinite(va)||!isFinite(ha))return out;out.push({symbol:m.ticker,direction:ha>=va?"Long VAR / Short HL":"Short VAR / Long HL",varApr:va,hlApr:ha,netApr:Math.abs(ha-va),priceGap:Math.abs(vm-hm)/((vm+hm)/2)*100});return out},[]);
+      $("status").className="status live";$("status").textContent="● Live · "+new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});render();
+    }catch(e){$("status").textContent="Data unavailable · retry";$("body").innerHTML='<tr><td colspan="7">Could not reach one of the live APIs.</td></tr>'}finally{loading=false;$("refresh").disabled=false}
+  }
+  ["search","size","gap"].forEach(function(id){$(id).addEventListener("input",render)});$("refresh").addEventListener("click",refresh);
+  document.querySelectorAll("th[data-sort]").forEach(function(h){h.addEventListener("click",function(){var k=h.getAttribute("data-sort");if(k==="daily")k="netApr";if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=k==="symbol"||k==="direction"?1:-1}render()})});
+  refresh();setInterval(refresh,60000);
+})();
+</script>
+</body>
+</html>
