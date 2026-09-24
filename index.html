@@ -43,14 +43,15 @@
     var body=$("body");body.textContent="";
     if(!visible.length){var tr=document.createElement("tr"),empty=td("No matching markets pass these filters.");empty.colSpan=7;tr.appendChild(empty);body.appendChild(tr)}
     visible.forEach(function(r){var tr=document.createElement("tr"),daily=size*r.netApr/100/365;tr.appendChild(td(r.symbol));tr.appendChild(td(r.direction));tr.appendChild(td(pct(r.varApr),r.varApr<0?"loss":""));tr.appendChild(td(pct(r.hlApr),r.hlApr<0?"loss":""));tr.appendChild(td(pct(r.netApr),"gain"));tr.appendChild(td(r.priceGap.toFixed(2)+"%"));tr.appendChild(td(money(daily),"gain"));body.appendChild(tr)});
-    $("count").textContent="Showing "+visible.length+" of "+rows.length+" exact shared tickers";
+    $("count").textContent="Showing "+visible.length+" of "+rows.length+" active shared markets";
   }
   async function refresh(){
     if(loading)return;loading=true;$("refresh").disabled=true;$("status").className="status";$("status").textContent="Refreshing…";
     try{
-      var responses=await Promise.all([fetch(VAR_API,{cache:"no-store"}),fetch(HL_API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"metaAndAssetCtxs"}),cache:"no-store"})]);
-      if(!responses[0].ok||!responses[1].ok)throw new Error("API unavailable");var data=await Promise.all([responses[0].json(),responses[1].json()]),v=data[0],h=data[1],map={};
-      h[0].universe.forEach(function(m,i){map[m.name]=h[1][i]});rows=v.listings.reduce(function(out,m){var x=map[m.ticker],vm=Number(m.mark_price),hm=x&&Number(x.markPx);if(!x||!isFinite(vm)||!isFinite(hm)||vm<=0||hm<=0)return out;var va=Number(m.funding_rate)*100,ha=Number(x.funding)*8760*100;if(!isFinite(va)||!isFinite(ha))return out;out.push({symbol:m.ticker,direction:ha>=va?"Long VAR / Short HL":"Short VAR / Long HL",varApr:va,hlApr:ha,netApr:Math.abs(ha-va),priceGap:Math.abs(vm-hm)/((vm+hm)/2)*100});return out},[]);
+      function hl(body){return fetch(HL_API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),cache:"no-store"}).then(function(r){if(!r.ok)throw new Error("Hyperliquid API unavailable");return r.json()})}
+      var data=await Promise.all([fetch(VAR_API,{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error("Variational API unavailable");return r.json()}),hl({type:"metaAndAssetCtxs"}),hl({type:"perpDexs"})]),v=data[0],feeds=[{dex:"Core",data:data[1]}];
+      var dexNames=data[2].filter(Boolean).map(function(d){return d.name}),dexData=await Promise.all(dexNames.map(function(dex){return hl({type:"metaAndAssetCtxs",dex:dex})}));dexData.forEach(function(d,i){feeds.push({dex:dexNames[i],data:d})});
+      var varMap={};v.listings.forEach(function(m){varMap[m.ticker]=m});rows=[];feeds.forEach(function(feed){feed.data[0].universe.forEach(function(m,i){var ticker=m.name.split(":").pop(),vmkt=varMap[ticker],x=feed.data[1][i],vm=vmkt&&Number(vmkt.mark_price),hm=x&&Number(x.markPx),mid=x&&Number(x.midPx),oi=x&&Number(x.openInterest);if(!vmkt||m.isDelisted||!x||!isFinite(vm)||!isFinite(hm)||!isFinite(mid)||!isFinite(oi)||vm<=0||hm<=0||mid<=0||oi<=0)return;var va=Number(vmkt.funding_rate)*100,ha=Number(x.funding)*8760*100;if(!isFinite(va)||!isFinite(ha))return;var venue=feed.dex==="Core"?"HL Core":"HL "+feed.dex;rows.push({symbol:ticker,direction:(ha>=va?"Long VAR / Short ":"Short VAR / Long ")+venue,varApr:va,hlApr:ha,netApr:Math.abs(ha-va),priceGap:Math.abs(vm-hm)/((vm+hm)/2)*100})})});
       $("status").className="status live";$("status").textContent="● Live · "+new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});render();
     }catch(e){$("status").textContent="Data unavailable · retry";$("body").innerHTML='<tr><td colspan="7">Could not reach one of the live APIs.</td></tr>'}finally{loading=false;$("refresh").disabled=false}
   }
